@@ -146,6 +146,7 @@ body::before{
 }
 .idle-mark{font-size:36px;line-height:1;opacity:.5}
 .idle-title{margin-top:2px;color:var(--text);font-size:clamp(20px,1.3vw,26px);font-weight:650}
+.idle-detail{margin-top:6px;font-size:clamp(13px,.85vw,16px);max-width:90%}
 .idle-copy{margin-top:2px;font-size:clamp(12px,.8vw,15px)}
 #status{position:fixed;right:12px;bottom:3px;font-size:9px;color:rgba(255,255,255,.15);z-index:10;pointer-events:none}
 body.night #screen{filter:brightness(.62) saturate(.86)}
@@ -288,7 +289,8 @@ body.night #screen{filter:brightness(.62) saturate(.86)}
     </div>
 
     <div id="playerIdle" class="idle">
-      <div class="idle-title">Nothing playing</div>
+      <div id="idleTitle" class="idle-title">Nothing playing</div>
+      <div id="idleDetail" class="idle-detail"></div>
     </div>
   </section>
 
@@ -541,6 +543,8 @@ async function fetchEmby(){
     lastMediaOkay=true;
   }catch(err){
     console.error("Emby error",err);
+    currentPlayback=null;
+    showMediaError(err);
     lastMediaOkay=false;
   }
 
@@ -631,6 +635,8 @@ async function fetchPlex(){
     lastMediaOkay=true;
   }catch(err){
     console.error("Plex error",err);
+    currentPlayback=null;
+    showMediaError(err);
     lastMediaOkay=false;
   }
 
@@ -695,9 +701,25 @@ function renderNowPlaying({title,subtitle,paused,positionTicks,runtimeTicks,imag
   updateTimeline();
 }
 
-function showMediaIdle(){
+function showMediaIdle(title="Nothing playing",detail=""){
   document.getElementById("playerContent").hidden=true;
   document.getElementById("playerIdle").hidden=false;
+  document.getElementById("idleTitle").textContent=title;
+  document.getElementById("idleDetail").textContent=detail;
+}
+
+function showMediaError(err){
+  const msg=String(err?.message||err);
+  let detail=msg;
+
+  if(/HTTP 401/.test(msg)){
+    detail="The server rejected the token/API key (401).";
+  }else if(err instanceof TypeError){
+    // fetch() gives no detail for network, CORS or mixed-content failures
+    detail="Network request blocked or failed. Check the server address, and that the kiosk page is not loaded over https.";
+  }
+
+  showMediaIdle(`Can't read from ${mediaLabel()}`,detail);
 }
 
 function renderMediaDemo(){
