@@ -8,7 +8,7 @@
 :root{
   --bg:#0b1119;--panel:rgba(255,255,255,.055);--panel2:rgba(255,255,255,.082);
   --line:rgba(255,255,255,.095);--text:#f5f7fb;--muted:#aeb9c8;
-  --accent:#a8d9ff;--good:#b9ebcb;--emby:#52b54b;--date-blue:#5795f7;--radius:30px;--shadow:0 24px 70px rgba(0,0,0,.28);--top-info-size:clamp(94px,7.45vw,136px)
+  --accent:#a8d9ff;--good:#b9ebcb;--emby:#52b54b;--plex:#e5a00d;--date-blue:#5795f7;--radius:30px;--shadow:0 24px 70px rgba(0,0,0,.28);--top-info-size:clamp(94px,7.45vw,136px)
 }
 *{box-sizing:border-box}
 [hidden]{display:none!important}
@@ -101,7 +101,7 @@ body::before{
   margin-top:0;font-size:clamp(65px,6vw,75px);font-weight:560;color:var(--date-blue);letter-spacing:-.025em
 }
 
-/* EMBY */
+/* NOW PLAYING (Emby / Plex) */
 .emby{
   min-height:0;overflow:hidden;padding:clamp(8px,.8vw,13px);
   display:flex;flex-direction:column
@@ -138,6 +138,7 @@ body::before{
 .timeline{margin-top:clamp(8px,1vh,13px);width:100%}
 .track{height:12px;background:rgba(255,255,255,.11);border-radius:999px;overflow:hidden}
 .fill{width:0;height:100%;background:var(--emby);box-shadow:0 0 16px rgba(82,181,75,.22);border-radius:999px;transition:width .8s linear}
+.plex .fill{background:var(--plex);box-shadow:0 0 16px rgba(229,160,13,.22)}
 .time-labels{display:flex;justify-content:space-between;margin-top:5px;color:var(--text);font-size:clamp(14px,.9vw,18px);font-weight:550}
 .idle{
   height:100%;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;
@@ -261,8 +262,8 @@ body.night #screen{filter:brightness(.62) saturate(.86)}
 
   <section id="forecast" class="card forecast"></section>
 
-  <section class="card emby">
-    <div class="eyebrow">Emby · Now playing</div>
+  <section id="mediaCard" class="card emby">
+    <div id="mediaEyebrow" class="eyebrow">Emby · Now playing</div>
 
     <div id="playerContent" class="player-main" hidden>
       <div class="cover-wrap">
@@ -301,12 +302,19 @@ const CONFIG = {
   latitude:"51.8892",
   longitude:"0.9042",
 
+  // Which media server to show: "plex" or "emby"
+  mediaSource:"plex",
+
+  plexServer:"http://YOUR-PLEX-SERVER:32400",
+  plexToken:"PASTE_PLEX_TOKEN",
+  plexPlayerName:"",
+
   embyServer:"http://192.168.0.19:8096",
   embyApiKey:"ebfff6e85e6f42f2be3011a029f4e602",
   embyPlayerName:"",
 
   weatherRefreshMinutes:15,
-  embyRefreshSeconds:5,
+  mediaRefreshSeconds:5,
 
   pixelShift:true,
   pixelShiftPixels:7,
@@ -318,11 +326,11 @@ const CONFIG = {
 const TICKS_PER_SECOND=10000000;
 let currentPlayback=null;
 let lastWeatherOkay=false;
-let lastEmbyOkay=false;
+let lastMediaOkay=false;
 
 function setStatus(){
   document.getElementById("status").textContent=
-    `${lastWeatherOkay?"weather ✓":"weather –"}   ${lastEmbyOkay?"emby ✓":"emby –"}`;
+    `${lastWeatherOkay?"weather ✓":"weather –"}   ${CONFIG.mediaSource} ${lastMediaOkay?"✓":"–"}`;
 }
 
 function updateClock(){
@@ -480,13 +488,26 @@ function renderWeatherDemo(){
   }
 }
 
+function mediaLabel(){
+  return CONFIG.mediaSource==="plex"?"Plex":"Emby";
+}
+
+function fetchMedia(){
+  return CONFIG.mediaSource==="plex"?fetchPlex():fetchEmby();
+}
+
+function setupMediaCard(){
+  document.getElementById("mediaEyebrow").textContent=`${mediaLabel()} · Now playing`;
+  document.getElementById("mediaCard").classList.toggle("plex",CONFIG.mediaSource==="plex");
+}
+
 async function fetchEmby(){
   const server=CONFIG.embyServer.replace(/\/$/,"");
   const key=CONFIG.embyApiKey.trim();
 
   if(!server || server.includes("YOUR-EMBY-SERVER") || !key || key.includes("PASTE_")){
-    renderEmbyDemo();
-    lastEmbyOkay=false;
+    renderMediaDemo();
+    lastMediaOkay=false;
     setStatus();
     return;
   }
@@ -510,17 +531,17 @@ async function fetchEmby(){
 
     if(!session){
       currentPlayback=null;
-      showEmbyIdle();
-      lastEmbyOkay=true;
+      showMediaIdle();
+      lastMediaOkay=true;
       setStatus();
       return;
     }
 
     renderEmbySession(session,server,key);
-    lastEmbyOkay=true;
+    lastMediaOkay=true;
   }catch(err){
     console.error("Emby error",err);
-    lastEmbyOkay=false;
+    lastMediaOkay=false;
   }
 
   setStatus();
@@ -529,26 +550,13 @@ async function fetchEmby(){
 function renderEmbySession(session,server,key){
   const item=session.NowPlayingItem;
   const ps=session.PlayState||{};
-  const runtime=item.RunTimeTicks||0;
-  const position=ps.PositionTicks||0;
 
-  currentPlayback={
-    positionTicks:position,
-    runtimeTicks:runtime,
-    paused:!!ps.IsPaused,
-    syncedAt:Date.now()
-  };
-
-  document.getElementById("playerIdle").hidden=true;
-  document.getElementById("playerContent").hidden=false;
-  document.getElementById("playingState").textContent=ps.IsPaused?"Paused":"Playing";
-  let displayTitle=item.Name||"Unknown title";
-
+  let title=item.Name||"Unknown title";
   let subtitle="";
 
   if(item.Type==="Episode"){
     if(item.SeriesName){
-      displayTitle=`${item.SeriesName} — ${item.Name||"Unknown episode"}`;
+      title=`${item.SeriesName} — ${item.Name||"Unknown episode"}`;
     }
 
     if(item.ParentIndexNumber!=null && item.IndexNumber!=null){
@@ -560,9 +568,6 @@ function renderEmbySession(session,server,key){
     subtitle=item.ProductionYear?String(item.ProductionYear):"";
   }
 
-  document.getElementById("mediaTitle").textContent=displayTitle;
-  document.getElementById("mediaSubtitle").textContent=subtitle;
-
   /*
     For TV episodes use the parent series poster rather than the
     episode-specific primary image. Movies/audio fall back to their
@@ -573,22 +578,133 @@ function renderEmbySession(session,server,key){
       ? item.SeriesId
       : (item.PrimaryImageItemId||item.Id);
 
-  let imageUrl=`${server}/Items/${encodeURIComponent(imageItemId)}/Images/Primary?maxHeight=1200&quality=92&api_key=${encodeURIComponent(key)}`;
+  renderNowPlaying({
+    title,
+    subtitle,
+    paused:!!ps.IsPaused,
+    positionTicks:ps.PositionTicks||0,
+    runtimeTicks:item.RunTimeTicks||0,
+    imageUrl:`${server}/Items/${encodeURIComponent(imageItemId)}/Images/Primary?maxHeight=1200&quality=92&api_key=${encodeURIComponent(key)}`
+  });
+}
 
-  document.getElementById("cover").src=imageUrl;
+async function fetchPlex(){
+  const server=CONFIG.plexServer.replace(/\/$/,"");
+  const token=CONFIG.plexToken.trim();
+
+  if(!server || server.includes("YOUR-PLEX-SERVER") || !token || token.includes("PASTE_")){
+    renderMediaDemo();
+    lastMediaOkay=false;
+    setStatus();
+    return;
+  }
+
+  try{
+    const res=await fetch(
+      `${server}/status/sessions?X-Plex-Token=${encodeURIComponent(token)}`,
+      {headers:{Accept:"application/json"}}
+    );
+    if(!res.ok) throw new Error(`Plex HTTP ${res.status}`);
+
+    const data=await res.json();
+    let candidates=data.MediaContainer?.Metadata||[];
+
+    if(CONFIG.plexPlayerName.trim()){
+      const q=CONFIG.plexPlayerName.trim().toLowerCase();
+      const filtered=candidates.filter(m=>
+        `${m.Player?.title||""} ${m.Player?.product||""} ${m.Player?.device||""}`.toLowerCase().includes(q)
+      );
+      if(filtered.length) candidates=filtered;
+    }
+
+    const session=candidates.find(m=>m.Player?.state==="playing")||candidates[0];
+
+    if(!session){
+      currentPlayback=null;
+      showMediaIdle();
+      lastMediaOkay=true;
+      setStatus();
+      return;
+    }
+
+    renderPlexSession(session,server,token);
+    lastMediaOkay=true;
+  }catch(err){
+    console.error("Plex error",err);
+    lastMediaOkay=false;
+  }
+
+  setStatus();
+}
+
+function renderPlexSession(item,server,token){
+  let title=item.title||"Unknown title";
+  let subtitle="";
+  let thumb=item.thumb;
+
+  if(item.type==="episode"){
+    if(item.grandparentTitle){
+      title=`${item.grandparentTitle} — ${item.title||"Unknown episode"}`;
+    }
+
+    if(item.parentIndex!=null && item.index!=null){
+      subtitle=`S${item.parentIndex} · E${item.index}`;
+    }
+
+    // Series poster rather than the episode still, as with Emby
+    thumb=item.grandparentThumb||item.parentThumb||item.thumb;
+  }else if(item.type==="track"){
+    subtitle=item.originalTitle||item.grandparentTitle||item.parentTitle||"";
+    thumb=item.parentThumb||item.thumb;
+  }else{
+    subtitle=item.year?String(item.year):"";
+  }
+
+  // Plex reports times in milliseconds; the timeline works in Emby-style ticks
+  const MS_TO_TICKS=TICKS_PER_SECOND/1000;
+
+  renderNowPlaying({
+    title,
+    subtitle,
+    paused:item.Player?.state==="paused",
+    positionTicks:(item.viewOffset||0)*MS_TO_TICKS,
+    runtimeTicks:(item.duration||0)*MS_TO_TICKS,
+    imageUrl:thumb
+      ? `${server}/photo/:/transcode?width=800&height=1200&minSize=1&upscale=1&url=${encodeURIComponent(thumb)}&X-Plex-Token=${encodeURIComponent(token)}`
+      : ""
+  });
+}
+
+function renderNowPlaying({title,subtitle,paused,positionTicks,runtimeTicks,imageUrl}){
+  currentPlayback={
+    positionTicks,
+    runtimeTicks,
+    paused,
+    syncedAt:Date.now()
+  };
+
+  document.getElementById("playerIdle").hidden=true;
+  document.getElementById("playerContent").hidden=false;
+  document.getElementById("playingState").textContent=paused?"Paused":"Playing";
+  document.getElementById("mediaTitle").textContent=title;
+  document.getElementById("mediaSubtitle").textContent=subtitle;
+
+  const cover=document.getElementById("cover");
+  if(imageUrl && cover.getAttribute("src")!==imageUrl) cover.src=imageUrl;
+
   updateTimeline();
 }
 
-function showEmbyIdle(){
+function showMediaIdle(){
   document.getElementById("playerContent").hidden=true;
   document.getElementById("playerIdle").hidden=false;
 }
 
-function renderEmbyDemo(){
+function renderMediaDemo(){
   document.getElementById("playerIdle").hidden=true;
   document.getElementById("playerContent").hidden=false;
   document.getElementById("playingState").textContent="Demo";
-  document.getElementById("mediaTitle").textContent="Your Emby title appears here";
+  document.getElementById("mediaTitle").textContent=`Your ${mediaLabel()} title appears here`;
   document.getElementById("mediaSubtitle").textContent="Series / film details";
 
   document.getElementById("cover").src=
@@ -604,7 +720,7 @@ function renderEmbyDemo(){
         <rect width='600' height='900' fill='url(#g)'/>
         <circle cx='300' cy='390' r='105' fill='none' stroke='#9fd6ff' stroke-opacity='.42' stroke-width='18'/>
         <path d='M275 330l115 60-115 60z' fill='#dcecff' fill-opacity='.8'/>
-        <text x='300' y='640' text-anchor='middle' fill='#dcecff' font-family='sans-serif' font-size='42'>EMBY</text>
+        <text x='300' y='640' text-anchor='middle' fill='#dcecff' font-family='sans-serif' font-size='42'>${mediaLabel().toUpperCase()}</text>
       </svg>
     `);
 
@@ -669,8 +785,9 @@ setInterval(updateTimeline,1000);
 fetchWeather();
 setInterval(fetchWeather,CONFIG.weatherRefreshMinutes*60*1000);
 
-fetchEmby();
-setInterval(fetchEmby,CONFIG.embyRefreshSeconds*1000);
+setupMediaCard();
+fetchMedia();
+setInterval(fetchMedia,CONFIG.mediaRefreshSeconds*1000);
 
 shiftPixels();
 setInterval(shiftPixels,CONFIG.pixelShiftSeconds*1000);
